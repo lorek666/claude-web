@@ -147,15 +147,22 @@ describe('what each model can do (same rules as the engine: claude-web-engine ef
     expect(modelCaps({ type: 'grok' }, 'grok-4.20-0309-non-reasoning').levels).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
   });
 
+  it('through the gateway a table-known reasoning model is native: a passthrough group delivers its budget (sub2api members get it rewritten), a translating one drops it upstream-side', () => {
+    expect(modelCaps({ type: 'gateway' }, 'grok-4.7')).toMatchObject({ levels: ['low', 'medium', 'high', 'xhigh'], native: true });
+    expect(modelCaps({ type: 'gateway' }, 'deepseek-v4-pro')).toMatchObject({ native: true });
+    expect(modelCaps({ type: 'gateway' }, 'glm-4.6').native).toBe(false); // unknown model: prompt way, as before
+  });
+
   it('a non-Claude model on a Claude-format relay: native only when the list declares levels', () => {
     expect(modelCaps({ type: 'anthropic' }, 'glm-4.6').native).toBe(false);
     expect(modelCaps({ type: 'anthropic', modelEfforts: { 'glm-4.6': { levels: ['low', 'high'] } } }, 'glm-4.6').native).toBe(true);
   });
 
-  it('a reasoning model on a Claude-format relay gets the budget (native); through the model gateway only Claude does', () => {
+  it('a reasoning model on a Claude-format relay gets the budget (native); through the model gateway so does a table-known reasoner (a passthrough group delivers its budget to the member — sub2api-style bridges read it via output_config.effort)', () => {
     expect(modelCaps({ type: 'anthropic' }, 'deepseek-chat')).toMatchObject({ reasoning: true, native: true });
-    expect(modelCaps({ type: 'gateway' }, 'gpt-5')).toMatchObject({ native: false });
-    expect(modelCaps({ type: 'gateway' }, 'deepseek-chat')).toMatchObject({ native: false });
+    expect(modelCaps({ type: 'gateway' }, 'gpt-5')).toMatchObject({ native: true });
+    expect(modelCaps({ type: 'gateway' }, 'deepseek-chat')).toMatchObject({ native: true });
+    expect(modelCaps({ type: 'gateway' }, 'glm-4.6').native).toBe(false); // unknown to the table: the prompt way
     expect(modelCaps({ type: 'gateway' }, 'claude-sonnet-4-6')).toMatchObject({ native: true });
   });
 
@@ -180,7 +187,7 @@ describe('what each model can do (same rules as the engine: claude-web-engine ef
     expect(env['gemini-3-pro']).toEqual({ native: false });
     expect(env['deepseek-flash']).toMatchObject({ reasoning: true });
     expect(env['gpt-4o']).toBeUndefined();
-    expect(JSON.parse(webCapsEnv({ type: 'gateway' }, ['gpt-5']))['gpt-5']).toEqual({ native: false });
+    expect(JSON.parse(webCapsEnv({ type: 'gateway' }, ['gpt-5']))['gpt-5']).toEqual({ levels: ['low', 'medium', 'high'], reasoning: true });
     expect(JSON.parse(webCapsEnv({ type: 'anthropic' }, ['claude-sonnet-4-6']))['claude-sonnet-4-6']).toEqual({ levels: ['low', 'medium', 'high', 'max'], reasoning: true });
   });
 

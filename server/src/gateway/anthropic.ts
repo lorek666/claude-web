@@ -194,8 +194,7 @@ export class AnthropicStreamParser implements StreamParser {
 }
 
 /** IR → Anthropic SSE for the client. */
-export class AnthropicStreamRenderer implements StreamRenderer {
-  private started = false;
+export class AnthropicStreamRenderer implements StreamRenderer {  private started = false;
   private index = -1;
   private open: 'text' | 'tool' | null = null;
   private usage: IrUsage = { input: 0, output: 0 };
@@ -253,4 +252,36 @@ export class AnthropicStreamRenderer implements StreamRenderer {
   end(): string {
     return this.finished ? '' : this.push({ t: 'error', message: '上游流意外结束' });
   }
+}
+
+// ---- passthrough effort rewrite (sub2api-style Anthropic bridges) ----
+
+/** The engine's budget table (effortPlan's phe): each level's `thinking.budget_tokens`. */
+const EFFORT_BUDGETS: readonly [number, string][] = [[2048, 'low'], [8192, 'medium'], [16384, 'high'], [32768, 'xhigh'], [63999, 'max']];
+
+/** Nearest level to a `thinking.budget_tokens` value; a tie goes to the higher one (nearestLevel's rule). */
+export function budgetToEffort(budget: number): string {
+  let best = EFFORT_BUDGETS[0]![1];
+  let dist = Infinity;
+  for (const [value, level] of EFFORT_BUDGETS) { // ascending: a later entry is the higher level, so `<=` breaks ties upward
+    const d = Math.abs(value - budget);
+    if (d <= dist) { best = level; dist = d; }
+  }
+  return best;
+}
+
+/**
+ * For an endpoint that reads thinking strength from `output_config.effort` and ignores `thinking` (sub2api's
+ * Anthropic bridge): move the engine's `thinking.budget_tokens` there. Returns null when there is nothing to
+ * rewrite — no numeric budget, or the request already states its effort.
+ */
+export function rewriteEffortAsOutputConfig(bodyText: string): string | null {
+  let body: any;
+  try { body = JSON.parse(bodyText); } catch { return null; }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const budget = body.thinking?.budget_tokens;
+  if (typeof budget !== 'number' || body.output_config?.effort) return null;
+  body.output_config = { ...(body.output_config ?? {}), effort: budgetToEffort(budget) };
+  delete body.thinking;
+  return JSON.stringify(body);
 }

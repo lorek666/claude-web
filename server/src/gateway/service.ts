@@ -19,6 +19,7 @@ import {
 import { CACHE_KEY_MAX, addMissing, affinityHeaders, cacheKeyOf, forcesTool, isParamRejection, mentionsCacheKey, refusesForcedTool, thinkingOff } from './cache.js';
 import { CacheShim, SHIM_PREFIX } from './shim.js';
 import { UpstreamError, decoded, decoder, errorHeaders, passthroughHeaders, readText, replaceTopLevelString, responseHeaders, sendUpstream, translatedHeaders, waitDrain, withTimeout, type UpstreamResponse } from './upstream.js';
+import { rewriteEffortAsOutputConfig } from './anthropic.js';
 
 /** Streaming: time from sending a request to the first body byte before the member counts as failed. */
 export const FIRST_BYTE_MS = 60_000;
@@ -403,6 +404,11 @@ export class GatewayService extends EventEmitter {
           path = ctx.path + ctx.search;
           // only the top-level "model" bytes change; the rest is exactly what the client sent
           body = model === ctx.model ? ctx.raw : Buffer.from(replaceTopLevelString(ctx.raw.toString('utf8'), 'model', model) ?? JSON.stringify({ ...ctx.json, model }));
+          // a member whose endpoint ignores `thinking` and reads `output_config.effort` (sub2api's bridge): carry the strength there
+          if (route.inbound === 'anthropic' && p.effortAsOutputConfig) {
+            const rewritten = rewriteEffortAsOutputConfig(body.toString('utf8'));
+            if (rewritten) body = Buffer.from(rewritten);
+          }
         }
         headers = passthroughHeaders(ctx.req.rawHeaders, outbound, p.apiKey);
       } else {

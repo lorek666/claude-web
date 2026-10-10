@@ -322,7 +322,9 @@ export function modelCaps(p: CapsProvider | undefined, model: string): ModelCaps
   // a Claude-format endpoint: Claude by version, another model that reasons gets a thinking budget (DeepSeek /anthropic…);
   // the model gateway turns other models' requests into another format and drops the parameter
   if (type === 'anthropic') native = isClaude || reasoning;
-  else if (type === 'gateway') native = isClaude;
+  // through the gateway: a passthrough group (anthropic member) delivers the budget to the member — sub2api-style
+  // bridges get it rewritten into output_config.effort (provider.effortAsOutputConfig); a translating group drops it
+  else if (type === 'gateway') native = isClaude || reasoning;
   else if (type === 'openai') native = !!declared?.levels?.length || openAIReasons(id);
   else if (type === 'gemini') native = lower.includes('gemini-3') || lower.includes('gemini-2.5');
   else native = !!declared?.levels?.length || !!table;

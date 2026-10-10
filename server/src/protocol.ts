@@ -170,6 +170,12 @@ export interface Provider {
   noResponsesApi?: boolean;
   /** learned: the endpoint rejected `prompt_cache_retention` by name — no longer sent on /v1/responses. */
   noCacheRetention?: boolean;
+  /**
+   * anthropic, gateway-passthrough members: the endpoint reads thinking strength from `output_config.effort`
+   * only and ignores `thinking.budget_tokens` (sub2api's Anthropic bridge). The gateway passthrough rewrites
+   * the engine's budget into `output_config.effort` for this member.
+   */
+  effortAsOutputConfig?: boolean;
 }
 export const CLAUDE_PROVIDER_ID = 'claude';
 /** One profile's result of `providers.refreshModels` (model list only — no chat request, no tokens). */

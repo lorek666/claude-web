@@ -472,6 +472,12 @@ function CacheOptions({ editing, set }: { editing: Draft; set: (d: Draft) => voi
           1 小时提示缓存（官方二进制 / 经模型网关；写入 2× 基础价）
         </label>
       )}
+      {editing.type === 'anthropic' && (
+        <label style={row} title="端点只读 output_config.effort、无视 thinking 预算（sub2api 的 Anthropic 桥就是如此，不开会一律按它的默认档跑）。开了之后：经模型网关把这个成员作为 Anthropic 透传成员时，把 thinking.budget_tokens 就近改写成 output_config.effort（2048→快 8192→均衡 16384→深入 32768→更深 63999→极限）">
+          <input type="checkbox" checked={!!editing.effortAsOutputConfig} onChange={(e) => set({ ...editing, effortAsOutputConfig: e.target.checked ? true : (null as any) })} />
+          经模型网关时智能程度改走 Anthropic 的新参数（sub2api 类桥接）
+        </label>
+      )}
       {learned.length > 0 && (
         <div className="sub" style={{ margin: '2px 0 6px' }}>
           自动记下：{learned.join('；')}{' '}
