@@ -136,6 +136,17 @@ describe('what each model can do (same rules as the engine: claude-web-engine ef
     expect(modelCaps({ type: 'grok' }, 'grok-4')).toMatchObject({ native: false });
   });
 
+  it('grok 4.x: xhigh from 4.6, grok-4.5 takes it but silently runs high, no max anywhere', () => {
+    expect(modelCaps({ type: 'grok' }, 'grok-4.7')).toMatchObject({ levels: ['low', 'medium', 'high', 'xhigh'], default: 'high', native: true });
+    expect(modelCaps({ type: 'grok' }, 'grok-4.6')).toMatchObject({ levels: ['low', 'medium', 'high', 'xhigh'], default: 'high', native: true });
+    expect(modelCaps({ type: 'grok' }, 'grok-4.5')).toMatchObject({ levels: ['low', 'medium', 'high'], default: 'high', native: true });
+    expect(modelCaps({ type: 'grok' }, 'grok-4.3')).toMatchObject({ levels: ['low', 'medium', 'high'], default: 'high', native: true });
+    expect(modelCaps({ type: 'grok' }, 'grok-4.1-fast')).toMatchObject({ levels: ['low', 'medium', 'high'], native: true });
+    // multi-agent takes the same enum (it sizes the agent count); the non-reasoning build is left to the fallback
+    expect(modelCaps({ type: 'grok' }, 'grok-4.20-multi-agent-0309')).toMatchObject({ levels: ['low', 'medium', 'high', 'xhigh'], default: 'high', native: true });
+    expect(modelCaps({ type: 'grok' }, 'grok-4.20-0309-non-reasoning').levels).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+  });
+
   it('a non-Claude model on a Claude-format relay: native only when the list declares levels', () => {
     expect(modelCaps({ type: 'anthropic' }, 'glm-4.6').native).toBe(false);
     expect(modelCaps({ type: 'anthropic', modelEfforts: { 'glm-4.6': { levels: ['low', 'high'] } } }, 'glm-4.6').native).toBe(true);

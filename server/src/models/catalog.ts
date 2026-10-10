@@ -291,6 +291,11 @@ function tableCaps(model: string): { levels: ClaudeEffort[]; default?: ClaudeEff
   if (m.includes('gemini-3')) return { levels: ['low', 'high'] };
   if (m.includes('gemini-2.5')) return { levels: CLAUDE_ORDER };
   if (m.includes('grok-3-mini')) return { levels: ['low', 'high'] };
+  // xAI reasoning_effort (docs.x.ai): xhigh exists from grok-4.6 on; grok-4.5 accepts xhigh but silently runs high
+  if (m.includes('grok-4.6') || m.includes('grok-4.7')) return { levels: ['low', 'medium', 'high', 'xhigh'], default: 'high' };
+  if (m.includes('grok-4.5') || m.includes('grok-4.3') || m.includes('grok-4.1')) return { levels: ['low', 'medium', 'high'], default: 'high' };
+  // grok-4.20 takes the same enum but it sizes the collaborating agent count (4/16), not the reasoning depth
+  if (m.includes('grok-4.20') && !m.includes('non-reasoning')) return { levels: ['low', 'medium', 'high', 'xhigh'], default: 'high' };
   return undefined;
 }
 
@@ -320,7 +325,7 @@ export function modelCaps(p: CapsProvider | undefined, model: string): ModelCaps
   else if (type === 'gateway') native = isClaude;
   else if (type === 'openai') native = !!declared?.levels?.length || openAIReasons(id);
   else if (type === 'gemini') native = lower.includes('gemini-3') || lower.includes('gemini-2.5');
-  else native = lower.includes('grok-3-mini');
+  else native = !!declared?.levels?.length || !!table;
   if (p?.promptEffortModels?.includes(model) || p?.promptEffortModels?.includes(id)) native = false;
   return { levels, ...(def ? { default: def } : {}), reasoning, native };
 }
