@@ -278,7 +278,8 @@ type CapsProvider = { type: ProviderType; modelEfforts?: Record<string, { levels
 export interface ModelCaps { levels: ClaudeEffort[]; default?: ClaudeEffort; reasoning: boolean; native: boolean }
 
 const baseName = (model: string) => { const m = model.toLowerCase(); return m.slice(m.lastIndexOf('/') + 1); };
-const openAIReasons = (model: string) => { const b = baseName(model); return /^(o[134]|gpt-5)/.test(b) || b.includes('deepseek') || b.includes('qwq') || b.includes('reasoner'); };
+// grok-3-mini and versioned grok-4.x take reasoning_effort on OpenAI-format endpoints (xAI docs); bare grok-4 does not
+const openAIReasons = (model: string) => { const b = baseName(model); return /^(o[134]|gpt-5)/.test(b) || b.includes('deepseek') || b.includes('qwq') || b.includes('reasoner') || /^grok-(3-mini|4\.\d)/.test(b); };
 
 /** What the table knows about a model by name (nothing = undefined). */
 function tableCaps(model: string): { levels: ClaudeEffort[]; default?: ClaudeEffort } | undefined {

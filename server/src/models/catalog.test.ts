@@ -153,6 +153,13 @@ describe('what each model can do (same rules as the engine: claude-web-engine ef
     expect(modelCaps({ type: 'gateway' }, 'glm-4.6').native).toBe(false); // unknown model: prompt way, as before
   });
 
+  it('grok on an OpenAI-format provider: 3-mini and versioned 4.x get reasoning_effort natively, bare grok-4 stays the prompt way', () => {
+    expect(modelCaps({ type: 'openai' }, 'grok-4.7')).toMatchObject({ levels: ['low', 'medium', 'high', 'xhigh'], default: 'high', native: true });
+    expect(modelCaps({ type: 'openai' }, 'grok-4.5')).toMatchObject({ levels: ['low', 'medium', 'high'], default: 'high', native: true });
+    expect(modelCaps({ type: 'openai' }, 'grok-3-mini')).toMatchObject({ levels: ['low', 'high'], native: true });
+    expect(modelCaps({ type: 'openai' }, 'grok-4').native).toBe(false);
+  });
+
   it('a non-Claude model on a Claude-format relay: native only when the list declares levels', () => {
     expect(modelCaps({ type: 'anthropic' }, 'glm-4.6').native).toBe(false);
     expect(modelCaps({ type: 'anthropic', modelEfforts: { 'glm-4.6': { levels: ['low', 'high'] } } }, 'glm-4.6').native).toBe(true);
