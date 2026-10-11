@@ -10,3 +10,6 @@ hello.txt
 color.txt
 .superpowers/
 .claude/worktrees/
+
+# macOS
+.DS_Store
