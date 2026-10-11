@@ -21,18 +21,19 @@ export function publicProvider(p: Provider): Provider {
 }
 
 /**
- * A profile resolved for one session (plaintext key). `shim`: openai / grok profiles whose Claude sessions go
- * through the local prompt-cache shim (gateway/shim.ts) — its base (the session key is appended) and the
- * internal key that replaces the real one in the child's env.
+ * A profile resolved for one session (plaintext key). `shim`: openai / grok profiles — and anthropic ones with
+ * `effortAsOutputConfig` — whose Claude sessions go through the local shim (gateway/shim.ts): its base (the
+ * session key is appended) and the internal key that replaces the real one in the child's env.
  */
 export type SessionProvider = Provider & { shim?: { base: string; key: string } };
 
 /**
  * `<shim base>/k/<cache key>[/s/<session id>]/v1` — what ccb's OpenAI-SDK clients use as their base URL. The cache
  * key routes the prompt cache (a fork keeps its parent's); the session id, when it differs, names the ledger rows.
+ * `anthropic`: the Anthropic SDK appends `/v1/messages` itself, so the base stops before the version segment.
  */
-export const shimBaseUrl = (s: { base: string }, sessionKey?: string, sessionId?: string) =>
-  `${s.base}${sessionKey ? `/k/${encodeURIComponent(sessionKey)}` : ''}${sessionKey && sessionId && sessionId !== sessionKey ? `/s/${encodeURIComponent(sessionId)}` : ''}/v1`;
+export const shimBaseUrl = (s: { base: string }, sessionKey?: string, sessionId?: string, anthropic = false) =>
+  `${s.base}${sessionKey ? `/k/${encodeURIComponent(sessionKey)}` : ''}${sessionKey && sessionId && sessionId !== sessionKey ? `/s/${encodeURIComponent(sessionId)}` : ''}${anthropic ? '' : '/v1'}`;
 
 const LOOPBACK = ['127.0.0.1', 'localhost', '::1'];
 
@@ -70,8 +71,15 @@ export function providerEnv(p: SessionProvider, agent: 'claude' | 'codex' | 'acp
     // so the same fingerprint env (plain UA, entrypoint cli) matters here too
     case 'gateway':
     case 'anthropic':
-      env.ANTHROPIC_BASE_URL = p.baseUrl;
-      env.ANTHROPIC_AUTH_TOKEN = p.apiKey; // Bearer — what relays like super-nb expect; official API keys work through it too
+      // an effortAsOutputConfig profile (sub2api's bridge reads only output_config.effort) goes through the
+      // local shim: the engine's thinking.budget_tokens is rewritten there, and the real key stays in the server
+      if (p.type === 'anthropic' && p.shim) {
+        env.ANTHROPIC_BASE_URL = shimBaseUrl(p.shim, opts.sessionKey, opts.sessionId, true);
+        env.ANTHROPIC_AUTH_TOKEN = p.shim.key;
+      } else {
+        env.ANTHROPIC_BASE_URL = p.baseUrl;
+        env.ANTHROPIC_AUTH_TOKEN = p.apiKey; // Bearer — what relays like super-nb expect; official API keys work through it too
+      }
       if (p.defaultModel) env.ANTHROPIC_MODEL = p.defaultModel;
       if (m.haiku) { env.ANTHROPIC_DEFAULT_HAIKU_MODEL = m.haiku; env.ANTHROPIC_SMALL_FAST_MODEL = m.haiku; }
       if (m.sonnet) env.ANTHROPIC_DEFAULT_SONNET_MODEL = m.sonnet;
@@ -410,6 +418,13 @@ export class ProviderService {
     const out: SessionProvider = { ...p, apiKey: this.plainKey(p) };
     // OpenAI-compatible profiles: through the local cache shim (profile switch cacheShim, default on)
     if ((p.type === 'openai' || p.type === 'grok') && p.cacheShim !== false) {
+      const s = this.shimEndpoint?.(p.id);
+      if (s) out.shim = s;
+    }
+    // sub2api-style bridges (effortAsOutputConfig): the shim turns the engine's thinking.budget_tokens into
+    // output_config.effort — the endpoint reads only that field. Shim unavailable (gateway not listening yet):
+    // direct as before, the effort just does not arrive.
+    if (p.type === 'anthropic' && p.effortAsOutputConfig) {
       const s = this.shimEndpoint?.(p.id);
       if (s) out.shim = s;
     }

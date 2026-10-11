@@ -1,7 +1,8 @@
-// Debug e2e for the two fork commits (084fba0 gateway effort rewrite, 6acb4e3 grok on openai providers),
-// plus the assumption they stand on (the engine sends a thinking budget for a non-Claude model on an
-// anthropic-format provider). Real server + real claude-web-engine, one fake upstream that records bodies:
-//   A  anthropic provider, grok-4.7 + 更深      → upstream sees thinking.budget_tokens 32768, no output_config
+// Debug e2e for the two fork commits (084fba0 gateway effort rewrite, 6acb4e3 grok on openai providers) plus
+// the direct-path shim, and the assumption they stand on (the engine sends a thinking budget for a non-Claude
+// model on an anthropic-format provider). Real server + real claude-web-engine, one fake upstream that records bodies:
+//   A  anthropic provider (no flag), grok-4.7 + 更深  → upstream sees thinking.budget_tokens 32768, no output_config
+//   E  anthropic provider + effortAsOutputConfig (direct) → upstream sees output_config.effort "xhigh", no thinking
 //   B  gateway → member with effortAsOutputConfig → upstream sees output_config.effort "xhigh", no thinking
 //   C  gateway → member without the flag (control) → upstream sees the budget untouched
 //   D  openai provider, grok-4.7 + 更深         → upstream sees reasoning_effort "xhigh"
@@ -140,6 +141,14 @@ async function main() {
   const am = mainOf('anthropic', 'DBG-A');
   check('A · anthropic provider, grok-4.7 + 更深 → a xhigh-neighborhood budget, no output_config', am.length > 0 && am.every((h) => h.body.thinking?.budget_tokens >= 24576 && h.body.thinking.budget_tokens < 63999 && !h.body.output_config), am.map((h) => JSON.stringify({ th: h.body.thinking, oc: h.body.output_config })).join(' | ').slice(0, 200));
   check('A · the answer comes back', /anthropic:ok/.test(ar.result?.result ?? ''), String(ar.result?.result ?? ar.result?.subtype ?? '(no result)').slice(0, 100));
+
+  // E: direct anthropic provider WITH the rewrite flag — the local shim carries the strength (the direct-path fix:
+  // no gateway group needed; the engine's ANTHROPIC_BASE_URL points at /gateway/~p/<id>/k/<key> on this server)
+  const e = await openOn(P2.id, 'grok-4.7', { effort: 'xhigh' });
+  const er = await turn(e.sessionId, 'DBG-E 你好');
+  const em = mainOf('anthropic', 'DBG-E');
+  check('E · direct anthropic + effortAsOutputConfig → output_config.effort "xhigh", no thinking, no cache key', em.length > 0 && em.every((h) => h.body.output_config?.effort === 'xhigh' && !h.body.thinking && h.body.prompt_cache_key === undefined), em.map((h) => JSON.stringify({ th: h.body.thinking, oc: h.body.output_config })).join(' | ').slice(0, 200));
+  check('E · the answer comes back', /anthropic:ok/.test(er.result?.result ?? ''), String(er.result?.result ?? er.result?.subtype ?? '(no result)').slice(0, 100));
 
   // B: gateway → member with effortAsOutputConfig — the passthrough rewrite carries the strength
   const b = await openOn(GB.id, 'grok-4.7', { effort: 'xhigh' });

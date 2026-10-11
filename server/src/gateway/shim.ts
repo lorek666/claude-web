@@ -22,7 +22,12 @@
 //   · Codex on an openai profile (providers.agentLaunch) speaks /v1/responses: forwarded as it is, except to a
 //     relay without that endpoint (404 / 405 / 501 not about the model — most relays and Chinese vendors): there
 //     it goes as chat/completions and comes back as `response.*` events (remembered, like `noResponsesApi` above).
-// Forwards only what these need: POST /v1/chat/completions, POST /v1/responses (openai), GET /v1/models[/<id>].
+//   · an anthropic profile with `effortAsOutputConfig` (sub2api's bridge reads only output_config.effort and
+//     ignores thinking budgets) speaks /v1/messages here: the request's thinking.budget_tokens goes out as
+//     output_config.effort (nearest level), the answer streams back as it came — no ledger row, the runner
+//     accounts these calls from the engine result exactly like a direct one.
+// Forwards only what these need: POST /v1/chat/completions, POST /v1/responses (openai), GET /v1/models[/<id>],
+// POST /v1/messages[/count_tokens] (anthropic).
 // Independent of the gateway's on/off switch, but like it: loopback only (GatewayService.handle), and the key
 // is per profile — HMAC(per-process secret, providerId): minted per process, never stored, one profile's
 // session cannot use another profile's credentials through it.
@@ -32,6 +37,7 @@ import { StringDecoder } from 'node:string_decoder';
 import type { MetaStore } from '../meta/store.js';
 import type { LedgerEntry, Provider } from '../protocol.js';
 import { openaiBase } from '../providers/service.js';
+import { rewriteEffortAsOutputConfig } from './anthropic.js';
 import * as C from './openai-chat.js';
 import * as R from './openai-responses.js';
 import { DEFAULT_BASE, joinUrl, upstreamErrorMessage } from './convert.js';
@@ -132,14 +138,16 @@ export class CacheShim {
     try { providerId = decodeURIComponent(m[1]); cacheKey = decodeURIComponent(m[2] ?? ''); sessionId = decodeURIComponent(m[3] ?? '') || cacheKey; } catch { return this.fail(res, 400, '地址编码错误'); }
     if (!this.keyOk(req, providerId)) return this.fail(res, 401, '缓存垫片密钥无效（只接受本进程发给这个供应商的对话的内部密钥）');
     const p = this.deps.member(providerId);
-    if (!p || (p.type !== 'openai' && p.type !== 'grok')) return this.fail(res, 404, `没有这个 OpenAI / Grok 型档案：${providerId}`);
+    if (!p || (p.type !== 'openai' && p.type !== 'grok' && p.type !== 'anthropic')) return this.fail(res, 404, `没有这个 OpenAI / Grok / Anthropic 型档案：${providerId}`);
     let rest = m[4] ?? '/';
     if (!/^\/v\d/.test(rest)) rest = `/v1${rest === '/' ? '' : rest}`;
     const method = (req.method ?? 'GET').toUpperCase();
-    const isChat = method === 'POST' && rest === '/v1/chat/completions';
+    const isChat = method === 'POST' && rest === '/v1/chat/completions' && p.type !== 'anthropic';
     // Codex on an openai profile speaks the Responses API (wire_api "responses")
     const isResponses = method === 'POST' && rest === '/v1/responses' && p.type === 'openai';
-    if (!isChat && !isResponses && !(method === 'GET' && /^\/v1\/models(\/[^/]+)?$/.test(rest))) return this.fail(res, 404, `缓存垫片不转发这个接口：${method} ${rest}`);
+    // an anthropic profile speaks the Messages API (the engine's own client: /v1/messages + count_tokens)
+    const isMessages = p.type === 'anthropic' && method === 'POST' && (rest === '/v1/messages' || rest === '/v1/messages/count_tokens');
+    if (!isChat && !isResponses && !isMessages && !(method === 'GET' && /^\/v1\/models(\/[^/]+)?$/.test(rest))) return this.fail(res, 404, `缓存垫片不转发这个接口：${method} ${rest}`);
     const chunks: Buffer[] = [];
     let size = 0;
     for await (const c of req) {
@@ -150,19 +158,45 @@ export class CacheShim {
     const key = cacheKey ? `cw:${cacheKey}`.slice(0, CACHE_KEY_MAX) : undefined;
     const raw = Buffer.concat(chunks);
     let json: any;
-    if (isChat || isResponses) { try { json = JSON.parse(raw.toString('utf8')); } catch { /* not ours to fix */ } }
+    if (isChat || isResponses || (isMessages && rest === '/v1/messages')) { try { json = JSON.parse(raw.toString('utf8')); } catch { /* not ours to fix */ } }
     // the affinity headers name the conversation the way its body does: Codex sends its own prompt_cache_key (the
     // thread id), and a relay should not get two ids for one conversation
     const own = typeof json?.prompt_cache_key === 'string' && json.prompt_cache_key ? json.prompt_cache_key.slice(0, CACHE_KEY_MAX) : undefined;
-    const headers = passthroughHeaders(req.rawHeaders, 'openai', p.apiKey);
-    if (own ?? key) addMissing(headers, affinityHeaders((own ?? key)!, p.type === 'grok'));
+    const headers = p.type === 'anthropic'
+      ? passthroughHeaders(req.rawHeaders, 'anthropic', p.apiKey)
+      : passthroughHeaders(req.rawHeaders, 'openai', p.apiKey);
+    if (p.type !== 'anthropic' && (own ?? key)) addMissing(headers, affinityHeaders((own ?? key)!, p.type === 'grok'));
     const ac = new AbortController();
     res.on('close', () => { if (!res.writableFinished) ac.abort(); });
-    const ctx: Ctx = { req, res, p, base: openaiBase(p.baseUrl || DEFAULT_BASE[p.type]), rest, search: url.search, raw, headers, sessionId, cacheKey: key, signal: ac.signal, t0: Date.now() };
+    const ctx: Ctx = { req, res, p, base: p.type === 'anthropic' ? p.baseUrl || DEFAULT_BASE.anthropic : openaiBase(p.baseUrl || DEFAULT_BASE[p.type]), rest, search: url.search, raw, headers, sessionId, cacheKey: key, signal: ac.signal, t0: Date.now() };
     if (!json || typeof json !== 'object' || Array.isArray(json)) return this.forward(ctx);
+    if (p.type === 'anthropic') return rest === '/v1/messages' ? this.anthropicMessages(ctx) : this.forward(ctx);
     if (isResponses) return p.noResponsesApi ? this.responsesViaChat(ctx, json) : this.responses(ctx, json);
     if (p.type === 'openai' && p.responsesApi !== false && !p.noResponsesApi && wantsResponses(String(json.model ?? ''))) return this.viaResponses(ctx, json);
     return this.chat(ctx, json);
+  }
+
+  /**
+   * An anthropic profile's /v1/messages: Anthropic in, Anthropic out — the response streams back as it came (no
+   * parsing, and no ledger row: the runner accounts these calls from the engine result like any direct one).
+   * With `effortAsOutputConfig` (a sub2api-style bridge reads only output_config.effort and ignores thinking
+   * budgets) the request's thinking.budget_tokens is rewritten there; every other byte stays the client's.
+   */
+  private async anthropicMessages(ctx: Ctx) {
+    let body = ctx.raw;
+    if (ctx.p.effortAsOutputConfig) {
+      const s = rewriteEffortAsOutputConfig(ctx.raw.toString('utf8'));
+      if (s) body = Buffer.from(s);
+    }
+    let up: UpstreamResponse;
+    try {
+      up = await sendUpstream(joinUrl(ctx.base, ctx.rest) + ctx.search, { method: 'POST', headers: ctx.headers, body, signal: ctx.signal, headerTimeoutMs: TIMEOUT_MS });
+    } catch (e: any) {
+      if (!ctx.signal.aborted) this.fail(ctx.res, e instanceof UpstreamError && e.timeout ? 504 : 502, e?.message ?? String(e));
+      return;
+    }
+    ctx.res.writeHead(up.status, responseHeaders(up.headers));
+    up.body.pipe(ctx.res);
   }
 
   /** The model list (or a chat body we cannot parse): bytes both ways, credential swapped. */

@@ -68,6 +68,7 @@ beforeAll(async () => {
   await mk('gpt', {});
   await mk('grok', { type: 'grok', baseUrl: U.url });
   await mk('ant', { type: 'anthropic', baseUrl: U.url });
+  await mk('ant-e', { type: 'anthropic', baseUrl: U.url, effortAsOutputConfig: true });
   gw = new GatewayService({ meta, member: (id) => meta.provider(id) ?? null, ledger: { record: (e) => ledger.push(e) } });
   const handler = (req: http.IncomingMessage, res: http.ServerResponse) => { if (!gw.handle(req, res, new URL(req.url ?? '/', 'http://127.0.0.1'))) res.writeHead(418).end(); };
   srv = http.createServer(handler);
@@ -370,6 +371,64 @@ describe('session wiring', () => {
     const p = svc().forSession('ant')!;
     expect((p as any).shim).toBeUndefined();
     expect(providerEnv(p, 'claude', { sessionKey: 'abc' })).toEqual({ CLAUDE_WEB_PLAIN_UA: '1', CLAUDE_CODE_ENTRYPOINT: 'cli', ANTHROPIC_BASE_URL: U.url, ANTHROPIC_AUTH_TOKEN: 'sk-ant' });
+  });
+  it('an effortAsOutputConfig Anthropic profile goes through the shim too (no /v1 — the SDK appends /v1/messages itself)', () => {
+    const p = svc().forSession('ant-e')!;
+    expect(p.shim).toBeTruthy();
+    const env = providerEnv(p, 'claude', { sessionKey: 'abc' });
+    expect(env.ANTHROPIC_BASE_URL).toBe(`${root}/gateway/~p/ant-e/k/abc`);
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBe(gw.shim.keyFor('ant-e'));
+    expect(JSON.stringify(env)).not.toContain('sk-ant-e');
+  });
+});
+
+describe('cache shim: anthropic (effortAsOutputConfig — sub2api-style bridge)', () => {
+  const ANT_STREAM = 'event: message_start\ndata: {"type":"message_start","message":{"id":"m1","model":"grok-4.7","usage":{"input_tokens":10}}}\n\n'
+    + 'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}\n\n';
+  const antStream: Handler = (_q, res) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); res.end(ANT_STREAM); };
+  const antBody = (extra: Record<string, unknown> = {}) => JSON.stringify({ model: 'grok-4.7', max_tokens: 32000, messages: [{ role: 'user', content: 'hi' }], stream: true, ...extra });
+  const postAnt = (pid: string, sid: string, body: string, path = '/v1/messages') =>
+    fetch(`${root}/gateway/~p/${pid}/k/${sid}${path}`, { method: 'POST', headers: { authorization: `Bearer ${gw.shim.keyFor(pid)}`, 'content-type': 'application/json', 'anthropic-version': '2023-06-01' }, body }).then(async (r) => ({ status: r.status, text: await r.text() }));
+
+  it('the budget goes out as output_config.effort, thinking gone, other bytes the client\'s; the SSE answer passes as it came', async () => {
+    U.handler.fn = antStream;
+    const r = await postAnt('ant-e', 'sess-a', antBody({ thinking: { type: 'enabled', budget_tokens: 31_999 } }));
+    expect(r.status).toBe(200);
+    const h = U.hits[0];
+    expect(h.url).toBe('/v1/messages');
+    const sent = JSON.parse(h.body);
+    expect(sent.output_config).toEqual({ effort: 'xhigh' });
+    expect(sent.thinking).toBeUndefined();
+    expect(sent.prompt_cache_key).toBeUndefined();
+    expect(sent.model).toBe('grok-4.7');
+    // credential swapped in the client's own style; the shim's internal key never leaves
+    expect(h.headers.authorization).toBe('Bearer sk-ant-e');
+    expect(JSON.stringify(h.rawHeaders)).not.toContain(gw.shim.keyFor('ant-e'));
+    expect(h.headers['anthropic-version']).toBe('2023-06-01');
+    expect(r.text).toBe(ANT_STREAM);
+    expect(ledger).toHaveLength(0); // the runner accounts this call from the engine result, like any direct one
+  });
+  it('without the switch the body passes untouched (today\'s direct behavior)', async () => {
+    U.handler.fn = antStream;
+    const body = antBody({ thinking: { type: 'enabled', budget_tokens: 31_999 } });
+    expect((await postAnt('ant', 'sess-a', body)).status).toBe(200);
+    expect(U.hits[0].body).toBe(body);
+  });
+  it('a body that already carries output_config.effort (Claude adaptive) is not touched', async () => {
+    U.handler.fn = antStream;
+    const body = antBody({ thinking: { type: 'adaptive' }, output_config: { effort: 'high' } });
+    expect((await postAnt('ant-e', 'sess-a', body)).status).toBe(200);
+    expect(U.hits[0].body).toBe(body);
+  });
+  it('count_tokens forwards as it is; chat/completions and unknown routes are not anthropic routes', async () => {
+    U.handler.fn = (_q, res) => res.writeHead(200, { 'content-type': 'application/json' }).end('{"input_tokens":11}');
+    const body = antBody();
+    expect((await postAnt('ant-e', 'sess-a', body, '/v1/messages/count_tokens')).status).toBe(200);
+    expect(U.hits[0]).toMatchObject({ method: 'POST', url: '/v1/messages/count_tokens' });
+    expect(U.hits[0].body).toBe(body);
+    expect((await postAnt('ant-e', 'sess-a', body, '/v1/chat/completions')).status).toBe(404);
+    expect((await postAnt('ant-e', 'sess-a', body, '/v1/complete')).status).toBe(404);
+    expect(U.hits).toHaveLength(1);
   });
 });
 

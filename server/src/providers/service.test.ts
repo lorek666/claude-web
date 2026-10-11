@@ -50,9 +50,11 @@ describe('providerEnv (anthropic, prompt caching)', () => {
     // a gateway profile is not an Anthropic profile: its members decide
     expect(providerEnv({ ...ant({ cache1h: true }), type: 'gateway' }).ENABLE_PROMPT_CACHING_1H).toBeUndefined();
   });
-  it('the shim never applies to Anthropic-type env even if a shim were attached', () => {
+  it('an attached shim (effortAsOutputConfig — forSession attaches it only for that) points ANTHROPIC_BASE_URL at it: no /v1, the SDK appends /v1/messages itself', () => {
     const env = providerEnv({ ...ant(), shim: { base: 'http://127.0.0.1:1/gateway/~p/a', key: 'cws-x' } }, 'claude', { sessionKey: 's' });
-    expect(env).toEqual({ CLAUDE_WEB_PLAIN_UA: '1', CLAUDE_CODE_ENTRYPOINT: 'cli', ANTHROPIC_BASE_URL: 'https://relay.example', ANTHROPIC_AUTH_TOKEN: 'k' });
+    expect(env).toEqual({ CLAUDE_WEB_PLAIN_UA: '1', CLAUDE_CODE_ENTRYPOINT: 'cli', ANTHROPIC_BASE_URL: 'http://127.0.0.1:1/gateway/~p/a/k/s', ANTHROPIC_AUTH_TOKEN: 'cws-x' });
+    // without an attached shim: the plain direct env, as always
+    expect(providerEnv(ant(), 'claude', { sessionKey: 's' })).toEqual({ CLAUDE_WEB_PLAIN_UA: '1', CLAUDE_CODE_ENTRYPOINT: 'cli', ANTHROPIC_BASE_URL: 'https://relay.example', ANTHROPIC_AUTH_TOKEN: 'k' });
   });
 });
 
